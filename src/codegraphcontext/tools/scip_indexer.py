@@ -63,6 +63,7 @@ EXTENSION_TO_SCIP: Dict[str, Tuple[str, str, str, str]] = {
     ".hpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".c":    ("c",          "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".h":    ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
+    ".cs":   ("csharp",     "scip-dotnet",     "dotnet tool install -g Microsoft.CodeAnalysis.ScipDotnet", "sourcegraph/scip-dotnet"),
 }
 
 
@@ -253,6 +254,9 @@ class ScipIndexer:
 
         elif lang in ("cpp", "c"):
             return [binary, f"--index-output-path={out}"]
+
+        elif lang == "csharp":
+            return [binary, "index", "--output", out]
 
         return None
 
@@ -463,8 +467,10 @@ class ScipIndexParser:
         return parts[-1] if parts else symbol
 
     def _lang_from_path(self, rel_path: str) -> str:
-        ext_map = {".py": "python", ".ipynb": "python", ".ts": "typescript", ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript", ".go": "go", ".rs": "rust"}
-        return ext_map.get(Path(rel_path).suffix, "unknown")
+        ext = Path(rel_path).suffix
+        if ext in EXTENSION_TO_SCIP:
+            return EXTENSION_TO_SCIP[ext][0]
+        return "unknown"
 
     def _parse_signature(self, display_name: str, kind: int) -> Tuple[List[str], Optional[str]]:
         import re
