@@ -673,6 +673,12 @@ def stats_helper(path: str = None, context: Optional[str] = None):
                     class_count = session.run("MATCH (c:Class) RETURN count(c) as c").single()["c"]
                     module_count = session.run("MATCH (m:Module) RETURN count(m) as c").single()["c"]
                     
+                    # Extended node types (PHP, Rust, Go, etc.)
+                    interface_count = session.run("MATCH (i:Interface) RETURN count(i) as c").single()["c"]
+                    trait_count = session.run("MATCH (t:Trait) RETURN count(t) as c").single()["c"]
+                    struct_count = session.run("MATCH (s:Struct) RETURN count(s) as c").single()["c"]
+                    enum_count = session.run("MATCH (e:Enum) RETURN count(e) as c").single()["c"]
+                    
                     table = Table(show_header=True, header_style="bold magenta")
                     table.add_column("Metric", style="cyan")
                     table.add_column("Count", style="green", justify="right")
@@ -681,6 +687,14 @@ def stats_helper(path: str = None, context: Optional[str] = None):
                     table.add_row("Files", str(file_count))
                     table.add_row("Functions", str(func_count))
                     table.add_row("Classes", str(class_count))
+                    if interface_count > 0:
+                        table.add_row("Interfaces", str(interface_count))
+                    if trait_count > 0:
+                        table.add_row("Traits", str(trait_count))
+                    if struct_count > 0:
+                        table.add_row("Structs", str(struct_count))
+                    if enum_count > 0:
+                        table.add_row("Enums", str(enum_count))
                     table.add_row("Modules", str(module_count))
                     
                     console.print(table)

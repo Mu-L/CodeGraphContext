@@ -138,6 +138,49 @@ async def run_scip_index_async(
             if processed % 50 == 0:
                 await asyncio.sleep(0)
 
+        # ── Supplementary pass: Tree-sitter-only for files SCIP missed ───
+        # Some SCIP indexers (e.g. scip-php with Composer classmap) only
+        # index a subset of repo files. Discover remaining parseable files
+        # and index them via Tree-sitter so the graph has full coverage.
+        scip_abs_paths = set(files_data.keys())
+        supplemented = 0
+        for repo_file in sorted(index_root.rglob("*")):
+            if not repo_file.is_file():
+                continue
+            abs_str = str(repo_file.resolve())
+            if abs_str in scip_abs_paths:
+                continue
+            if file_path_has_ignore_dir_segment(repo_file, index_root):
+                continue
+            ts_parser = get_parser(repo_file.suffix)
+            if not ts_parser:
+                continue
+            try:
+                ts_data = ts_parser.parse(repo_file, is_dependency, index_source=True)
+                if "error" in ts_data:
+                    continue
+                ts_data["repo_path"] = str(index_root)
+                ts_data.setdefault("function_calls_scip", [])
+                ts_data.setdefault("module_level_calls_scip", [])
+                writer.add_file_to_graph(ts_data, repo_name, imports_map)
+                # Also include in files_data so inheritance/calls resolution sees them
+                files_data[abs_str] = ts_data
+                supplemented += 1
+                processed += 1
+                if job_id:
+                    job_manager.update_job(
+                        job_id, processed_files=processed, current_file=abs_str
+                    )
+            except Exception as e:
+                debug_log(f"Tree-sitter supplement (non-SCIP file) failed for {abs_str}: {e}")
+        if supplemented:
+            # Re-run pre_scan with the expanded file list so imports_map is complete
+            all_paths = [Path(p) for p in files_data.keys() if Path(p).exists()]
+            imports_map = pre_scan_for_imports(all_paths, parsers_keys, get_parser)
+            info_logger(
+                f"[SCIP+TS] Supplemented {supplemented} files not covered by SCIP indexer"
+            )
+
         info_logger(
             f"[INHERITS] Resolving inheritance links across {len(files_data)} files..."
         )

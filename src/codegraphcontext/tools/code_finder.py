@@ -847,7 +847,11 @@ class CodeFinder:
             "function": "Function",
             "class": "Class",
             "file": "File",
-            "module": "Module"
+            "module": "Module",
+            "interface": "Interface",
+            "trait": "Trait",
+            "struct": "Struct",
+            "enum": "Enum",
         }
         label = type_map.get(element_type.lower())
         

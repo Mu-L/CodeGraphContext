@@ -64,6 +64,7 @@ EXTENSION_TO_SCIP: Dict[str, Tuple[str, str, str, str]] = {
     ".c":    ("c",          "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".h":    ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".cs":   ("csharp",     "scip-dotnet",     "dotnet tool install -g Microsoft.CodeAnalysis.ScipDotnet", "sourcegraph/scip-dotnet"),
+    ".php":  ("php",        "scip-php",        "composer global require davidrjenni/scip-php", "davidrjenni/scip-php"),
 }
 
 
@@ -258,6 +259,9 @@ class ScipIndexer:
         elif lang == "csharp":
             return [binary, "index", "--output", out]
 
+        elif lang == "php":
+            return [binary, "index", "--project-root", str(project_path), "--output", out]
+
         return None
 
 
@@ -328,21 +332,9 @@ class ScipIndexParser:
                 symbol_def_table[sym_info.symbol]["documentation"] = "\n".join(sym_info.documentation)
                 symbol_def_table[sym_info.symbol]["kind"] = sym_info.kind
 
-        for sym, info in symbol_def_table.items():
-            if sym == "rust_impls":
-                continue
-            if info.get("kind", 0) == 0:
-                if sym.endswith("#"):
-                    info["kind"] = 7
-                elif sym.endswith("()."):
-                    info["kind"] = 26 if "#" in sym else 17
-            
-            # Apply Rust implementations if available
-            rust_impls = symbol_def_table.get("rust_impls", {})
-            name = self._name_from_symbol(sym)
-            if name in rust_impls and info.get("kind") in (7, 18, 20, 49, 53, 54):
-                info["bases"] = list(set(info.get("bases", []) + list(rust_impls[name])))
-
+        # Load source lines BEFORE kind inference so we can inspect source
+        # to distinguish interfaces/traits from classes for indexers that
+        # report Kind 0 for all symbols (e.g. scip-php).
         files_data: Dict[str, Dict] = {}
         doc_source_lines: Dict[str, List[str]] = {}
         for doc in index.documents:
@@ -351,6 +343,35 @@ class ScipIndexParser:
                 doc_source_lines[doc.relative_path] = src_path.read_text(encoding="utf-8", errors="replace").splitlines()
             except Exception:
                 doc_source_lines[doc.relative_path] = []
+
+        for sym, info in symbol_def_table.items():
+            if sym == "rust_impls":
+                continue
+            if info.get("kind", 0) == 0:
+                if sym.endswith("#"):
+                    kind = 7  # Default: class
+                    if sym.startswith("scip-go") or sym.startswith("rust-analyzer"):
+                        kind = 49  # Struct
+                    else:
+                        # Check source to distinguish class/interface/trait
+                        file_path = info.get("file", "")
+                        line_num = info.get("line", 0)
+                        source = doc_source_lines.get(file_path, [])
+                        if 0 < line_num <= len(source):
+                            src_line = source[line_num - 1].strip().lower()
+                            if src_line.startswith("interface "):
+                                kind = 20  # Interface
+                            elif src_line.startswith("trait "):
+                                kind = 53  # Trait
+                    info["kind"] = kind
+                elif sym.endswith("()."):
+                    info["kind"] = 26 if "#" in sym else 17
+            
+            # Apply Rust implementations if available
+            rust_impls = symbol_def_table.get("rust_impls", {})
+            name = self._name_from_symbol(sym)
+            if name in rust_impls and info.get("kind") in (7, 18, 20, 49, 53, 54):
+                info["bases"] = list(set(info.get("bases", []) + list(rust_impls[name])))
 
         for doc in index.documents:
             rel_path = doc.relative_path
@@ -380,14 +401,23 @@ class ScipIndexParser:
                     defn = symbol_def_table.get(sym, {})
                     kind = defn.get("kind", 0)
                     if kind == 0:
-                        if sym.endswith("()."): kind = 17
-                        elif "#" in sym:
-                            if sym.endswith("#"):
-                                if sym.startswith("scip-go") or sym.startswith("rust-analyzer"):
-                                    kind = 49
-                                else:
-                                    kind = 7
-                            elif sym.endswith("()."): kind = 26
+                        # Check method before function: methods have # in symbol
+                        if sym.endswith("().") and "#" in sym:
+                            kind = 26  # Method
+                        elif sym.endswith("()."):
+                            kind = 17  # Function
+                        elif sym.endswith("#"):
+                            # Check source to distinguish class/interface/trait
+                            src = doc_source_lines.get(rel_path, [])
+                            src_line = src[line - 1].strip().lower() if 0 < line <= len(src) else ""
+                            if src_line.startswith("interface "):
+                                kind = 20
+                            elif src_line.startswith("trait "):
+                                kind = 53
+                            elif sym.startswith("scip-go") or sym.startswith("rust-analyzer"):
+                                kind = 49
+                            else:
+                                kind = 7
                     
                     name = self._name_from_symbol(sym)
                     args, return_type = self._parse_signature(defn.get("display_name", ""), kind)
@@ -434,7 +464,12 @@ class ScipIndexParser:
                     callee_info = symbol_def_table[sym]
                     r = list(occ.range)
                     ref_line_idx = r[0]
-                    col_end = r[2] if len(r) > 2 else (r[1] if len(r) > 1 else 0)
+                    if len(r) == 4:
+                        col_end = r[3]
+                    elif len(r) == 3:
+                        col_end = r[2]
+                    else:
+                        col_end = r[1] if len(r) > 1 else 0
                     src_line = source_lines[ref_line_idx] if ref_line_idx < len(source_lines) else ""
                     char_after = src_line[col_end:col_end + 1] if col_end < len(src_line) else ""
 
@@ -461,10 +496,17 @@ class ScipIndexParser:
 
     def _name_from_symbol(self, symbol: str) -> str:
         import re
-        s = symbol.rstrip(".#")
+        # Strip parameter descriptors: .($param), .($p1).($p2), etc.
+        s = re.sub(r'\.\(\$?[^)]*\)', '', symbol)
+        s = s.rstrip(".#")
+        # Remove function/method call markers: ()
         s = re.sub(r"\(\)\.?$", "", s)
         parts = re.split(r'[/#]', s)
-        return parts[-1] if parts else symbol
+        name = parts[-1] if parts else symbol
+        # Handle space-separated package descriptors (PHP: "project 1.0.0 Animal")
+        if ' ' in name:
+            name = name.rsplit(' ', 1)[-1]
+        return name
 
     def _lang_from_path(self, rel_path: str) -> str:
         ext = Path(rel_path).suffix

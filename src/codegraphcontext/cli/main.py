@@ -1374,6 +1374,18 @@ def find_by_name(
             results.extend(variables)
             results.extend(modules)
             results.extend(imports)
+
+            # Also search Interface, Trait, Struct, Enum nodes (PHP, Rust, Go, etc.)
+            with db_manager.get_driver().session() as session:
+                for label in ['Interface', 'Trait', 'Struct', 'Enum']:
+                    res = session.run(
+                        f"MATCH (n:{label}) WHERE n.name = $name RETURN n.name as name, n.path as path, n.line_number as line_number",
+                        name=name
+                    )
+                    for record in res:
+                        row = dict(record)
+                        row['type'] = label
+                        results.append(row)
         
         elif type.lower() == 'function':
             results = code_finder.find_by_function_name(name, fuzzy_search=False)
@@ -1460,7 +1472,7 @@ def find_by_pattern(
             if not case_sensitive:
                 query = """
                     MATCH (n)
-                    WHERE (n:Function OR n:Class OR n:Module OR n:Variable) AND toLower(n.name) CONTAINS toLower($pattern)
+                    WHERE (n:Function OR n:Class OR n:Module OR n:Variable OR n:Interface OR n:Trait OR n:Struct OR n:Enum) AND toLower(n.name) CONTAINS toLower($pattern)
                     RETURN 
                         labels(n)[0] as type,
                         n.name as name,
@@ -1473,7 +1485,7 @@ def find_by_pattern(
             else:
                  query = """
                     MATCH (n)
-                    WHERE (n:Function OR n:Class OR n:Module OR n:Variable) AND n.name CONTAINS $pattern
+                    WHERE (n:Function OR n:Class OR n:Module OR n:Variable OR n:Interface OR n:Trait OR n:Struct OR n:Enum) AND n.name CONTAINS $pattern
                     RETURN 
                         labels(n)[0] as type,
                         n.name as name,
