@@ -159,6 +159,73 @@ class TestJavaDiCrossFileCalls:
         assert JavaTreeSitterParser._strip_generic("  RoidFraudCheckService  ") == "RoidFraudCheckService"
 
 
+class TestJavaParameterParsing:
+    def test_annotation_string_commas_do_not_split_parameters(self, parser):
+        src = """
+        package com.example.app;
+
+        public class AnnotatedController {
+            public void handle(
+                @Named(value = "text, with (parentheses)", escaped = "quote: \\"") String name,
+                java.util.List<java.util.Map<String, Integer>> values
+            ) {}
+        }
+
+        @interface Named {
+            String value();
+            String escaped() default "";
+        }
+        """
+
+        data = _write_and_parse(parser, src)
+        handle = next(f for f in data["functions"] if f["name"] == "handle")
+
+        assert handle["args"] == ["name", "values"]
+        assert handle["arg_types"] == ["String", "java.util.List"]
+
+    def test_annotation_array_values_do_not_split_parameters(self, parser):
+        src = """
+        package com.example.app;
+
+        public class AnnotatedController {
+            public void handle(@Flags({"a,b", "(x,y)"}) String name, int count) {}
+        }
+
+        @interface Flags {
+            String[] value();
+        }
+        """
+
+        data = _write_and_parse(parser, src)
+        handle = next(f for f in data["functions"] if f["name"] == "handle")
+
+        assert handle["args"] == ["name", "count"]
+        assert handle["arg_types"] == ["String", "Int"]
+
+    def test_final_with_non_space_whitespace_is_stripped(self, parser):
+        src = """
+        package com.example.app;
+
+        public class AnnotatedController {
+            public void handle(
+                @Named("a,b") final
+                String name,
+                final\tint count
+            ) {}
+        }
+
+        @interface Named {
+            String value();
+        }
+        """
+
+        data = _write_and_parse(parser, src)
+        handle = next(f for f in data["functions"] if f["name"] == "handle")
+
+        assert handle["args"] == ["name", "count"]
+        assert handle["arg_types"] == ["String", "Int"]
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: full cross-file CALLS resolution via resolve_function_call
 # ---------------------------------------------------------------------------
@@ -225,6 +292,30 @@ class TestJavaCrossFileResolution:
                 assert resolved["called_file_path"] == service_path, (
                     f"WorkService has no DI fields; expected self-resolution for '{call['name']}'"
                 )
+
+
+    def test_super_call_without_base_context_stays_in_caller_file(self):
+        """Non-Kotlin super.method() calls must not resolve to unrelated same-name symbols."""
+        caller_path = "/tmp/Controller.java"
+        external_path = "/tmp/Audit.java"
+
+        resolved = resolve_function_call(
+            {
+                "name": "audit",
+                "full_name": "super.audit",
+                "line_number": 12,
+                "args": [],
+                "context": ("handle", "function", 10),
+            },
+            caller_file_path=caller_path,
+            local_names={"Controller", "handle"},
+            local_imports={},
+            imports_map={"audit": [external_path]},
+            skip_external=False,
+        )
+
+        assert resolved is not None
+        assert resolved["called_file_path"] == caller_path
 
 
 # ---------------------------------------------------------------------------
@@ -434,4 +525,3 @@ class TestSpringDataRepoDetection:
             assert r.get("method_name"), f"method_name missing on {r}"
             assert r.get("method_path"), f"method_path missing on {r}"
             assert r.get("entity_class"), f"entity_class missing on {r}"
-

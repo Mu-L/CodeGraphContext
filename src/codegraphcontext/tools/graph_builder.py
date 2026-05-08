@@ -32,6 +32,7 @@ class GraphBuilder:
         self.loop = loop
         self.driver = self.db_manager.get_driver()
         self._writer = GraphWriter(self.driver)
+        self.last_call_resolution_diagnostics: list[Dict[str, Any]] = []
         self.parsers = {
             ".py": "python",
             ".ipynb": "python",
@@ -780,7 +781,23 @@ class GraphBuilder:
         file_class_lookup: Optional[Dict[str, set]] = None,
     ) -> None:
         """Resolve and persist CALLS relationships (public API)."""
-        groups = build_function_call_groups(all_file_data, imports_map, file_class_lookup)
+        diagnostics: list[Dict[str, Any]] = []
+        groups = build_function_call_groups(
+            all_file_data,
+            imports_map,
+            file_class_lookup,
+            diagnostics=diagnostics,
+        )
+        self.last_call_resolution_diagnostics = diagnostics
+        if diagnostics:
+            sample = ", ".join(
+                f"{d.get('full_call_name')}:{d.get('reason')}"
+                for d in diagnostics[:5]
+            )
+            info_logger(
+                f"[CALLS] Skipped {len(diagnostics)} unresolved call(s). "
+                f"Sample: {sample}"
+            )
         self._writer.write_function_call_groups(*groups)
 
     def _create_all_function_calls(
@@ -959,6 +976,7 @@ class GraphBuilder:
                         "Falling back to Tree-sitter."
                     )
 
+            self.last_call_resolution_diagnostics = []
             await run_tree_sitter_index_async(
                 path,
                 is_dependency,
@@ -970,6 +988,7 @@ class GraphBuilder:
                 self.get_parser,
                 self.parse_file,
                 self.add_minimal_file_node,
+                call_resolution_diagnostics=self.last_call_resolution_diagnostics,
             )
         except Exception as e:
             error_message = str(e)

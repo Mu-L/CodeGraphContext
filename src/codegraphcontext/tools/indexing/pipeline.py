@@ -28,6 +28,7 @@ async def run_tree_sitter_index_async(
     get_parser: Callable[[str], Any],
     parse_file: Callable[[Path, Path, bool], Dict[str, Any]],
     add_minimal_file_node: Callable[[Path, Path, bool], None],
+    call_resolution_diagnostics: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Parse all discovered files, write symbols, then inheritance + CALLS."""
     if job_id:
@@ -36,7 +37,7 @@ async def run_tree_sitter_index_async(
     writer.add_repository_to_graph(path, is_dependency)
     repo_name = path.name
 
-    files, _ignore_root = discover_files_to_index(path, cgcignore_path)
+    files, _ignore_root = discover_files_to_index(path, cgcignore_path, supported_extensions=set(parsers.keys()))
 
     if job_id:
         job_manager.update_job(job_id, total_files=len(files))
@@ -85,7 +86,12 @@ async def run_tree_sitter_index_async(
     t1 = time.time()
     info_logger(f"Inheritance links created in {t1 - t0:.1f}s. Starting function calls...")
 
-    groups = build_function_call_groups(all_file_data, imports_map, None)
+    groups = build_function_call_groups(
+        all_file_data,
+        imports_map,
+        None,
+        diagnostics=call_resolution_diagnostics,
+    )
     writer.write_function_call_groups(*groups)
     t2 = time.time()
     info_logger(f"Function calls created in {t2 - t1:.1f}s. Total post-processing: {t2 - t0:.1f}s")

@@ -67,5 +67,4 @@ def test_call_chain_avoids_list_extract():
 
     q = recorder["last_query"]
     assert "list_extract" not in q
-    assert "func_nodes[size(func_nodes)]" in q
-
+    assert "func_nodes[size(func_nodes)-1]" in q

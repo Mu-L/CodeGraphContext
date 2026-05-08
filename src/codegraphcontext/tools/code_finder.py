@@ -1,5 +1,6 @@
 # src/codegraphcontext/tools/code_finder.py
 import logging
+from collections import Counter
 
 from typing import Any, Dict, List, Literal, Optional
 from pathlib import Path
@@ -38,6 +39,91 @@ def _normalize_identifier(s: str) -> str:
     """
     return s.lower().replace('_', '').replace(' ', '')
 
+
+def summarize_kotlin_call_ambiguity(
+    rows: List[Dict[str, Any]],
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """Summarize multi-target Kotlin function CALLS edges by callsite/name group."""
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row.get("caller_path"),
+            row.get("caller_line"),
+            row.get("caller_end_line"),
+            row.get("call_line"),
+            row.get("full_call_name"),
+            row.get("target_name"),
+        )
+        target = (
+            row.get("target_path"),
+            row.get("target_line"),
+            row.get("target_context"),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "caller_name": row.get("caller_name"),
+                "caller_path": row.get("caller_path"),
+                "caller_line": row.get("caller_line"),
+                "caller_end_line": row.get("caller_end_line"),
+                "call_line": row.get("call_line"),
+                "full_call_name": row.get("full_call_name"),
+                "target_name": row.get("target_name"),
+                "args": row.get("args"),
+                "targets": set(),
+            },
+        )
+        group["targets"].add(target)
+
+    ambiguous_groups = [
+        {
+            **{k: v for k, v in group.items() if k != "targets"},
+            "targets": [
+                {
+                    "path": target_path,
+                    "line_number": target_line,
+                    "context": target_context,
+                }
+                for target_path, target_line, target_context in sorted(
+                    group["targets"],
+                    key=lambda target: (
+                        str(target[0] or ""),
+                        target[1] or 0,
+                        str(target[2] or ""),
+                    ),
+                )
+            ],
+            "target_count": len(group["targets"]),
+        }
+        for group in groups.values()
+        if len(group["targets"]) > 1
+    ]
+    ambiguous_groups.sort(
+        key=lambda group: (
+            -group["target_count"],
+            str(group.get("caller_path") or ""),
+            group.get("call_line") or 0,
+            str(group.get("full_call_name") or ""),
+        )
+    )
+    top_names = Counter(
+        group.get("target_name")
+        for group in ambiguous_groups
+        if group.get("target_name")
+    )
+    return {
+        "kotlin_fn_to_fn_edges": len(rows),
+        "ambiguous_groups": len(ambiguous_groups),
+        "ambiguous_edges": sum(group["target_count"] for group in ambiguous_groups),
+        "top_names": [
+            {"name": name, "groups": count}
+            for name, count in top_names.most_common(limit)
+        ],
+        "examples": ambiguous_groups[:limit],
+    }
+
+
 class CodeFinder:
     """Module for finding relevant code snippets and analyzing relationships."""
 
@@ -45,6 +131,35 @@ class CodeFinder:
         self.db_manager = db_manager
         self.driver = self.db_manager.get_driver()
         self._lacks_native_fulltext = getattr(db_manager, 'get_backend_type', lambda: 'neo4j')() != 'neo4j'
+
+    def audit_kotlin_call_ambiguity(
+        self,
+        repo_path: Optional[str] = None,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Audit Kotlin function-to-function CALLS edges for multi-target callsites."""
+        repo_path = str(Path(repo_path).resolve()) if repo_path else None
+        repo_filter = "AND a.path STARTS WITH $repo_path" if repo_path else ""
+        query = f"""
+            MATCH (a:Function)-[r:CALLS]->(b:Function)
+            WHERE a.path ENDS WITH '.kt'
+              AND b.path ENDS WITH '.kt'
+              {repo_filter}
+            RETURN a.name as caller_name,
+                   a.path as caller_path,
+                   a.line_number as caller_line,
+                   a.end_line as caller_end_line,
+                   r.line_number as call_line,
+                   r.full_call_name as full_call_name,
+                   b.name as target_name,
+                   b.path as target_path,
+                   b.line_number as target_line,
+                   b.context as target_context,
+                   r.args as args
+        """
+        with self.driver.session() as session:
+            rows = session.run(query, repo_path=repo_path).data()
+        return summarize_kotlin_call_ambiguity(rows, limit=limit)
 
     def format_query(self, find_by: Literal["Class", "Function"], fuzzy_search:bool, repo_path: Optional[str] = None) -> str:
         """Format the search query based on the search type and fuzzy search settings."""
@@ -712,38 +827,63 @@ class CodeFinder:
     def find_all_callers(self, function_name: str, path: Optional[str] = None, repo_path: Optional[str] = None) -> List[Dict]:
         """Find all direct and indirect callers of a specific function."""
         with self.driver.session() as session:
-            repo_filter = "AND f.path STARTS WITH $repo_path " if repo_path else ""
-            path_filter = "AND target.path = $path" if path else ""
-            # KùzuDB-compatible: Use anonymous end node and filter with WHERE
-            query = f"""
-                MATCH p = (f:Function)-[:CALLS*]->()
-                WITH f as f, p as p, nodes(p) as path_nodes
-                WITH f as f, path_nodes as path_nodes, path_nodes[size(path_nodes)-1] as target
-                WHERE target.name = $function_name {path_filter} {repo_filter}
-                RETURN DISTINCT f.name AS caller_name, f.path AS caller_file_path, f.line_number AS caller_line_number, f.is_dependency AS caller_is_dependency
-                ORDER BY caller_is_dependency ASC, caller_file_path, caller_line_number
-                LIMIT 50
-            """
-            result = session.run(query, function_name=function_name, path=path, repo_path=repo_path)
+            repo_filter = "AND f.path STARTS WITH $repo_path" if repo_path else ""
+            if path:
+                # KùzuDB-compatible: Use anonymous end node and filter with WHERE
+                query = f"""
+                    MATCH p = (f:Function)-[:CALLS*]->()
+                    WITH f as f, p as p, nodes(p) as path_nodes
+                    WITH f as f, path_nodes as path_nodes, path_nodes[size(path_nodes)-1] as target
+                    WHERE target.name = $function_name AND target.path = $path {repo_filter}
+                    RETURN DISTINCT f.name AS caller_name, f.path AS caller_file_path, f.line_number AS caller_line_number, f.is_dependency AS caller_is_dependency
+                    ORDER BY caller_is_dependency ASC, caller_file_path, caller_line_number
+                    LIMIT 50
+                """
+                result = session.run(query, function_name=function_name, path=path, repo_path=repo_path)
+            else:
+                # KùzuDB-compatible: Use anonymous end node and filter with WHERE
+                query = f"""
+                    MATCH p = (f:Function)-[:CALLS*]->()
+                    WITH f as f, p as p, nodes(p) as path_nodes
+                    WITH f as f, path_nodes as path_nodes, path_nodes[size(path_nodes)-1] as target
+                    WHERE target.name = $function_name {repo_filter}
+                    RETURN DISTINCT f.name AS caller_name, f.path AS caller_file_path, f.line_number AS caller_line_number, f.is_dependency AS caller_is_dependency
+                    ORDER BY caller_is_dependency ASC, caller_file_path, caller_line_number
+                    LIMIT 50
+                """
+                result = session.run(query, function_name=function_name, repo_path=repo_path)
             return result.data()
 
     def find_all_callees(self, function_name: str, path: Optional[str] = None, repo_path: Optional[str] = None) -> List[Dict]:
         """Find all direct and indirect callees of a specific function."""
         with self.driver.session() as session:
             repo_filter = "WHERE f.path STARTS WITH $repo_path" if repo_path else ""
-            path_filter = ", path: $path" if path else ""
-            # KùzuDB-compatible: Use anonymous end node and extract from path
-            query = f"""
-                MATCH (caller:Function {{name: $function_name{path_filter}}})
-                MATCH p = (caller)-[:CALLS*]->()
-                WITH p as p, nodes(p) as path_nodes
-                WITH path_nodes[size(path_nodes)-1] as f
-                {repo_filter}
-                RETURN DISTINCT f.name AS callee_name, f.path AS callee_file_path, f.line_number AS callee_line_number, f.is_dependency AS callee_is_dependency
-                ORDER BY callee_is_dependency ASC, callee_file_path, callee_line_number
-                LIMIT 50
-            """
-            result = session.run(query, function_name=function_name, path=path, repo_path=repo_path)
+            if path:
+                # KùzuDB-compatible: Use anonymous end node and extract from path
+                query = f"""
+                    MATCH (caller:Function {{name: $function_name, path: $path}})
+                    MATCH p = (caller)-[:CALLS*]->()
+                    WITH p as p, nodes(p) as path_nodes
+                    WITH path_nodes[size(path_nodes)-1] as f
+                    {repo_filter}
+                    RETURN DISTINCT f.name AS callee_name, f.path AS callee_file_path, f.line_number AS callee_line_number, f.is_dependency AS callee_is_dependency
+                    ORDER BY callee_is_dependency ASC, callee_file_path, callee_line_number
+                    LIMIT 50
+                """
+                result = session.run(query, function_name=function_name, path=path, repo_path=repo_path)
+            else:
+                # KùzuDB-compatible: Use anonymous end node and extract from path
+                query = f"""
+                    MATCH (caller:Function {{name: $function_name}})
+                    MATCH p = (caller)-[:CALLS*]->()
+                    WITH p as p, nodes(p) as path_nodes
+                    WITH path_nodes[size(path_nodes)-1] as f
+                    {repo_filter}
+                    RETURN DISTINCT f.name AS callee_name, f.path AS callee_file_path, f.line_number AS callee_line_number, f.is_dependency AS callee_is_dependency
+                    ORDER BY callee_is_dependency ASC, callee_file_path, callee_line_number
+                    LIMIT 50
+                """
+                result = session.run(query, function_name=function_name, repo_path=repo_path)
             return result.data()
 
     def find_function_call_chain(self, start_function: str, end_function: str, max_depth: int = 5, start_file: Optional[str] = None, end_file: Optional[str] = None, repo_path: Optional[str] = None) -> List[Dict]:
@@ -761,7 +901,7 @@ class CodeFinder:
                 WITH start as start, end_target as end_target
                 MATCH path = (start)-[:CALLS*1..{max_depth}]->()
                 WITH path as path, end_target as end_target, nodes(path) as func_nodes, relationships(path) as call_rels
-                WITH path as path, func_nodes as func_nodes, call_rels as call_rels, end_target as end_target, func_nodes[size(func_nodes)] as path_end
+                WITH path as path, func_nodes as func_nodes, call_rels as call_rels, end_target as end_target, func_nodes[size(func_nodes)-1] as path_end
                 WHERE path_end.name = end_target.name AND (end_target.path IS NULL OR path_end.path = end_target.path)
                 RETURN func_nodes as function_nodes, call_rels as call_nodes, size(call_rels) as chain_length
                 ORDER BY chain_length ASC

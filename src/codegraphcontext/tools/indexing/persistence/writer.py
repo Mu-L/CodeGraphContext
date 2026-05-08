@@ -87,14 +87,12 @@ class GraphWriter:
             session.run(
                 """
                 MERGE (f:File {path: $path})
-                SET f.name = $name, f.relative_path = $relative_path, f.is_dependency = $is_dependency,
-                    f.package_name = $package_name
+                SET f.name = $name, f.relative_path = $relative_path, f.is_dependency = $is_dependency
             """,
                 path=file_path_str,
                 name=file_name,
                 relative_path=relative_path,
                 is_dependency=is_dependency,
-                package_name=file_data.get("package_name"),
             )
 
             file_path_obj = Path(file_path_str)
@@ -166,6 +164,9 @@ class GraphWriter:
                             class_fn_batch.append(
                                 {
                                     "class_name": item["class_context"],
+                                    "class_line": item.get("class_context_line", -1)
+                                    if item.get("class_context_line") is not None
+                                    else -1,
                                     "func_name": item["name"],
                                     "func_line": item["line_number"],
                                 }
@@ -268,6 +269,7 @@ class GraphWriter:
                     UNWIND $batch AS row
                     MATCH (c:Class {name: row.class_name, path: $file_path})
                     MATCH (fn:Function {name: row.func_name, path: $file_path, line_number: row.func_line})
+                    WHERE row.class_line < 0 OR c.line_number = row.class_line
                     MERGE (c)-[:CONTAINS]->(fn)
                 """,
                     batch=class_fn_batch,
@@ -313,16 +315,24 @@ class GraphWriter:
                             }
                         )
                 else:
-                    module_name = imp.get("name") or imp.get("source") or imp.get("full_import_name")
-                    if module_name:
-                        other_imports.append(
-                            {
-                                "name": module_name,
-                                "alias": imp.get("alias") or "",
-                                "full_import_name": imp.get("full_import_name") or module_name,
-                                "line_number": imp.get("line_number") or 0,
-                            }
-                        )
+                    module_name = imp.get("name") or imp.get("source")
+                    if not module_name:
+                        continue
+                    full_import_name = (
+                        imp.get("full_import_name")
+                        or imp.get("source")
+                        or module_name
+                    )
+                    other_imports.append(
+                        {
+                            "name": module_name,
+                            "full_import_name": full_import_name,
+                            "imported_name": imp.get("imported_name") or module_name,
+                            "alias": imp.get("alias"),
+                            "line_number": imp.get("line_number"),
+                            "lang": imp.get("lang") or lang,
+                        }
+                    )
 
             if js_imports:
                 session.run(
@@ -345,10 +355,13 @@ class GraphWriter:
                     UNWIND $batch AS row
                     MATCH (f:File {path: $file_path})
                     MERGE (m:Module {name: row.name})
-                    SET m.full_import_name = coalesce(row.full_import_name, m.full_import_name)
+                    SET m.lang = coalesce(row.lang, m.lang),
+                        m.full_import_name = coalesce(row.full_import_name, m.full_import_name)
                     MERGE (f)-[r:IMPORTS]->(m)
                     SET r.line_number = row.line_number,
-                        r.alias = row.alias
+                        r.alias = row.alias,
+                        r.imported_name = row.imported_name,
+                        r.full_import_name = row.full_import_name
                 """,
                     batch=other_imports,
                     file_path=file_path_str,
@@ -451,49 +464,58 @@ class GraphWriter:
             UNWIND $batch AS row
             MATCH (caller:Function {name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number})
             MATCH (called:Function {name: row.called_name, path: row.called_file_path})
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
+            WHERE (row.called_line_number < 0 OR called.line_number = row.called_line_number)
+              AND (row.called_context = '' OR called.context = row.called_context)
+            MERGE (caller)-[call:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
+            SET call.confidence = row.confidence, call.resolution_tier = row.resolution_tier,
+                call.confidence_label = row.confidence_label
         """
         q_fn_to_cls = """
             UNWIND $batch AS row
             MATCH (caller:Function {name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number})
             MATCH (called:Class {name: row.called_name, path: row.called_file_path})
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
+            WHERE row.called_line_number < 0 OR called.line_number = row.called_line_number
+            MERGE (caller)-[call:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
+            SET call.confidence = row.confidence, call.resolution_tier = row.resolution_tier,
+                call.confidence_label = row.confidence_label
         """
         q_cls_to_fn = """
             UNWIND $batch AS row
             MATCH (caller:Class {name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number})
             MATCH (called:Function {name: row.called_name, path: row.called_file_path})
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
+            WHERE (row.called_line_number < 0 OR called.line_number = row.called_line_number)
+              AND (row.called_context = '' OR called.context = row.called_context)
+            MERGE (caller)-[call:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
+            SET call.confidence = row.confidence, call.resolution_tier = row.resolution_tier,
+                call.confidence_label = row.confidence_label
         """
         q_cls_to_cls = """
             UNWIND $batch AS row
             MATCH (caller:Class {name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number})
             MATCH (called:Class {name: row.called_name, path: row.called_file_path})
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
+            WHERE row.called_line_number < 0 OR called.line_number = row.called_line_number
+            MERGE (caller)-[call:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
+            SET call.confidence = row.confidence, call.resolution_tier = row.resolution_tier,
+                call.confidence_label = row.confidence_label
         """
         q_file_to_fn = """
             UNWIND $batch AS row
             MATCH (caller:File {path: row.caller_file_path})
             MATCH (called:Function {name: row.called_name, path: row.called_file_path})
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
+            WHERE (row.called_line_number < 0 OR called.line_number = row.called_line_number)
+              AND (row.called_context = '' OR called.context = row.called_context)
+            MERGE (caller)-[call:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
+            SET call.confidence = row.confidence, call.resolution_tier = row.resolution_tier,
+                call.confidence_label = row.confidence_label
         """
         q_file_to_cls = """
             UNWIND $batch AS row
             MATCH (caller:File {path: row.caller_file_path})
             MATCH (called:Class {name: row.called_name, path: row.called_file_path})
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
+            WHERE row.called_line_number < 0 OR called.line_number = row.called_line_number
+            MERGE (caller)-[call:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
+            SET call.confidence = row.confidence, call.resolution_tier = row.resolution_tier,
+                call.confidence_label = row.confidence_label
         """
         groups: List[Tuple[str, List[Dict], str]] = [
             ("fn→fn", fn_to_fn, q_fn_to_fn),
@@ -504,6 +526,51 @@ class GraphWriter:
             ("file→cls", file_to_cls, q_file_to_cls),
         ]
         total_all = sum(len(g[1]) for g in groups)
+
+        def normalize_call_batch(batch_calls: List[Dict], label: str) -> List[Dict]:
+            normalized = []
+            for call in batch_calls:
+                if not isinstance(call, dict) or not call:
+                    warning_logger(f"[CALLS] {label}: skipping malformed call row: {call!r}")
+                    continue
+
+                called_line_number = call.get("called_line_number")
+                if called_line_number is None:
+                    called_line_number = -1
+                elif isinstance(called_line_number, bool):
+                    warning_logger(
+                        f"[CALLS] {label}: skipping call row with invalid called_line_number: {call!r}"
+                    )
+                    continue
+                else:
+                    try:
+                        called_line_number = int(called_line_number)
+                    except (TypeError, ValueError):
+                        warning_logger(
+                            f"[CALLS] {label}: skipping call row with invalid called_line_number: {call!r}"
+                        )
+                        continue
+
+                called_context = call.get("called_context")
+                if called_context is None:
+                    called_context = ""
+                elif not isinstance(called_context, str):
+                    warning_logger(
+                        f"[CALLS] {label}: skipping call row with invalid called_context: {call!r}"
+                    )
+                    continue
+
+                normalized.append(
+                    {
+                        **call,
+                        "called_line_number": called_line_number,
+                        "called_context": called_context,
+                        "confidence": call.get("confidence", 0.1),
+                        "resolution_tier": call.get("resolution_tier", 9),
+                    }
+                )
+            return normalized
+
         with self.driver.session() as session:
             for label, calls, query in groups:
                 if not calls:
@@ -511,7 +578,9 @@ class GraphWriter:
                     continue
                 t0 = time.time()
                 for i in range(0, len(calls), batch_size):
-                    batch = calls[i : i + batch_size]
+                    batch = normalize_call_batch(calls[i : i + batch_size], label)
+                    if not batch:
+                        continue
                     session.run(query, batch=batch)
                     written = min(i + batch_size, len(calls))
                     if written % 5000 < batch_size or written == len(calls):
@@ -796,6 +865,7 @@ class GraphWriter:
                     SET m.version = row.version,
                         m.packaging = row.packaging,
                         m.pom_path = row.pom_path,
+                        m.path = row.pom_path,
                         m.repo_path = $repo_path
                     """,
                     batch=modules[i : i + batch_size],
@@ -863,7 +933,7 @@ class GraphWriter:
                     """
                     UNWIND $batch AS row
                     MERGE (m:GradleModule {name: row.name})
-                    SET m.build_file = row.build_file, m.repo_path = $repo_path
+                    SET m.build_file = row.build_file, m.path = row.build_file, m.repo_path = $repo_path
                     """,
                     batch=modules[i : i + batch_size],
                     repo_path=repo_path_str,

@@ -586,7 +586,7 @@ def bundle_export(
     services = _initialize_services(context)
     if not all(services[:3]):
         return
-    db_manager, graph_builder, code_finder = services[:3]
+    db_manager, _, code_finder = services[:3]
     
     try:
         output_path = Path(output)
@@ -1199,7 +1199,7 @@ def report(
     """
     _load_credentials()
     output_path = Path(output) if output else Path.cwd() / "CGC_REPORT.md"
-    db_manager, _, _ = _initialize_services(context)
+    db_manager, _, _, _ = _initialize_services(context)
     try:
         from codegraphcontext.tools.report_generator import generate_report
         report_text = generate_report(db_manager, output_path=output_path, include_java=java)
@@ -1987,6 +1987,65 @@ def analyze_chain(
                         args_info = f" [dim]({args_str})[/dim]"
                     
                     console.print(f"{indent}  ⬇ [dim]calls at line {line}[/dim]{args_info}")
+    finally:
+        db_manager.close_driver()
+
+@analyze_app.command("kotlin-call-audit")
+def analyze_kotlin_call_audit(
+    repo_path: Optional[str] = typer.Option(None, "--repo-path", "-r", help="Limit audit to paths under this repository root"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum examples/top names to show"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+    fail_on_ambiguity: bool = typer.Option(False, "--fail-on-ambiguity", help="Exit non-zero if any ambiguous Kotlin call groups are found"),
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+):
+    """
+    Audit Kotlin function call edges for multi-target callsite ambiguity.
+
+    Example:
+        cgc analyze kotlin-call-audit --context elrond-stable --fail-on-ambiguity
+        cgc analyze kotlin-call-audit --json
+    """
+    _load_credentials()
+    services = _initialize_services(context)
+    if not all(services[:3]):
+        return
+    db_manager, _, code_finder = services[:3]
+
+    try:
+        result = code_finder.audit_kotlin_call_ambiguity(repo_path=repo_path, limit=limit)
+        if json_output:
+            console.print_json(json.dumps(result))
+        else:
+            console.print("\n[bold cyan]Kotlin CALLS ambiguity audit[/bold cyan]")
+            summary = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
+            summary.add_column("Metric", style="cyan")
+            summary.add_column("Value", style="green")
+            summary.add_row("Kotlin fn→fn CALLS edges", str(result["kotlin_fn_to_fn_edges"]))
+            summary.add_row("Ambiguous groups", str(result["ambiguous_groups"]))
+            summary.add_row("Ambiguous edges", str(result["ambiguous_edges"]))
+            console.print(summary)
+
+            if result["examples"]:
+                examples = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
+                examples.add_column("Callsite", style="cyan", overflow="fold")
+                examples.add_column("Call", style="yellow", overflow="fold")
+                examples.add_column("Targets", style="green", overflow="fold")
+                for example in result["examples"]:
+                    targets = "\n".join(
+                        f"{target['context'] or ''}:{target['line_number']} {target['path']}"
+                        for target in example["targets"]
+                    )
+                    examples.add_row(
+                        f"{example.get('caller_name')} {example.get('caller_path')}:{example.get('call_line')}",
+                        str(example.get("full_call_name") or ""),
+                        targets,
+                    )
+                console.print(examples)
+            else:
+                console.print("[green]No ambiguous Kotlin call groups found.[/green]")
+
+        if fail_on_ambiguity and result["ambiguous_groups"]:
+            raise typer.Exit(1)
     finally:
         db_manager.close_driver()
 

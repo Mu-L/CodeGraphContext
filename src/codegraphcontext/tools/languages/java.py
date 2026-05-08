@@ -338,9 +338,11 @@ class JavaTreeSitterParser:
                         
                         params_node = node.child_by_field_name("parameters")
                         parameters = []
+                        parameter_types = []
                         if params_node:
                             params_text = self._get_node_text(params_node)
                             parameters = self._extract_parameter_names(params_text)
+                            parameter_types = self._extract_parameter_types(params_text)
 
                         source_text = self._get_node_text(node)
                         
@@ -350,17 +352,19 @@ class JavaTreeSitterParser:
                         func_data = {
                             "name": func_name,
                             "parameters": parameters,
+                            "args": parameters,
+                            "arg_types": parameter_types,
                             "line_number": start_line,
                             "end_line": end_line,
                             "path": str(path),
                             "lang": self.language_name,
                             "context": context_name,
-                            "class_context": context_name if context_type and "class" in context_type else None
+                            "class_context": context_name if context_type in ("class_declaration", "interface_declaration", "enum_declaration", "annotation_type_declaration") else None
                         }
 
                         if package_name:
                             func_data["package_name"] = package_name
-                            class_ctx = context_name if (context_type and "class" in context_type) else None
+                            class_ctx = context_name if context_type in ("class_declaration", "interface_declaration", "enum_declaration", "annotation_type_declaration") else None
                             if class_ctx:
                                 func_data["qualified_name"] = f"{package_name}.{class_ctx}.{func_name}"
                             else:
@@ -541,7 +545,7 @@ class JavaTreeSitterParser:
                         "path": str(path),
                         "lang": self.language_name,
                         "context": ctx_name,
-                        "class_context": ctx_name if ctx_type and "class" in ctx_type else None
+                        "class_context": ctx_name if ctx_type in ("class_declaration", "interface_declaration", "enum_declaration", "annotation_type_declaration") else None
                      })
 
         return variables
@@ -616,9 +620,12 @@ class JavaTreeSitterParser:
                         })
 
                 elif "Table" in ann_map and "Entity" not in ann_map:
-                    # Could be Spring Data Cassandra @Table(value="...")
+                    # Could be Spring Data Cassandra @Table(keyspace="...", name="...") or @Table(value="...")
                     t_args = ann_map["Table"] or ""
-                    m = re.search(r'value\s*=\s*"([^"]+)"', t_args)
+                    # Prefer explicit name= attribute (Cassandra uses keyspace+name; name= is the table)
+                    m = re.search(r'\bname\s*=\s*"([^"]+)"', t_args)
+                    if not m:
+                        m = re.search(r'value\s*=\s*"([^"]+)"', t_args)
                     if not m:
                         m = re.search(r'"([^"]+)"', t_args)
                     table_name = m.group(1) if m else (class_name.lower() if class_name else None)
@@ -919,7 +926,7 @@ class JavaTreeSitterParser:
                         "args": args,
                         "inferred_obj_type": inferred_obj_type,
                         "context": (ctx_name, ctx_type, ctx_line),
-                        "class_context": (ctx_name, ctx_line) if ctx_type and "class" in ctx_type else (None, None),
+                        "class_context": (ctx_name, ctx_line) if ctx_type in ("class_declaration", "interface_declaration", "enum_declaration", "annotation_type_declaration") else (None, None),
                         "lang": self.language_name,
                         "is_dependency": False,
                     }
@@ -940,8 +947,8 @@ class JavaTreeSitterParser:
         if not params_content:
             return params
             
-        for param in params_content.split(","):
-            param = param.strip()
+        for param in self._split_parameters(params_text):
+            param = self._strip_parameter_annotations_and_modifiers(param)
             if param:
                 parts = param.split()
                 if len(parts) >= 2:
@@ -949,6 +956,134 @@ class JavaTreeSitterParser:
                     params.append(param_name)
                     
         return params
+
+    def _split_parameters(self, params_text: str) -> list[str]:
+        if not params_text or params_text.strip() == "()":
+            return []
+
+        params_content = params_text.strip().strip("()")
+        if not params_content:
+            return []
+
+        params = []
+        current = []
+        depth_angle = depth_round = depth_square = depth_curly = 0
+        in_string: Optional[str] = None
+        escaped = False
+        for char in params_content:
+            if in_string:
+                current.append(char)
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == in_string:
+                    in_string = None
+                continue
+
+            if char in {"'", '"'}:
+                in_string = char
+            elif char == "<":
+                depth_angle += 1
+            elif char == ">":
+                depth_angle = max(0, depth_angle - 1)
+            elif char == "(":
+                depth_round += 1
+            elif char == ")":
+                depth_round = max(0, depth_round - 1)
+            elif char == "[":
+                depth_square += 1
+            elif char == "]":
+                depth_square = max(0, depth_square - 1)
+            elif char == "{":
+                depth_curly += 1
+            elif char == "}":
+                depth_curly = max(0, depth_curly - 1)
+            elif char == "," and depth_angle == depth_round == depth_square == depth_curly == 0:
+                param = "".join(current).strip()
+                if param:
+                    params.append(param)
+                current = []
+                continue
+            current.append(char)
+
+        param = "".join(current).strip()
+        if param:
+            params.append(param)
+        return params
+
+    def _matching_paren_index(self, text: str, open_index: int) -> Optional[int]:
+        depth = 0
+        in_string: Optional[str] = None
+        escaped = False
+        for idx in range(open_index, len(text)):
+            char = text[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == in_string:
+                    in_string = None
+                continue
+
+            if char in {"'", '"'}:
+                in_string = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return idx
+        return None
+
+    def _strip_parameter_annotations_and_modifiers(self, param: str) -> str:
+        text = param.strip()
+        while text:
+            final_match = re.match(r"final\b\s*", text)
+            if final_match:
+                text = text[final_match.end() :].lstrip()
+                continue
+            if not text.startswith("@"):
+                break
+
+            match = re.match(r"@[\w.]+", text)
+            if not match:
+                break
+            idx = match.end()
+            while idx < len(text) and text[idx].isspace():
+                idx += 1
+            if idx < len(text) and text[idx] == "(":
+                close_idx = self._matching_paren_index(text, idx)
+                if close_idx is None:
+                    break
+                idx = close_idx + 1
+            text = text[idx:].lstrip()
+        return text
+
+    def _extract_parameter_types(self, params_text: str) -> list[str]:
+        primitive_types = {
+            "byte": "Byte",
+            "short": "Short",
+            "int": "Int",
+            "long": "Long",
+            "float": "Float",
+            "double": "Double",
+            "boolean": "Boolean",
+            "char": "Char",
+        }
+        types = []
+        for param in self._split_parameters(params_text):
+            cleaned = self._strip_parameter_annotations_and_modifiers(param)
+            parts = cleaned.split()
+            if len(parts) < 2:
+                continue
+            type_name = " ".join(parts[:-1]).replace("...", "[]").strip()
+            while type_name.endswith("[]"):
+                type_name = type_name[:-2].strip()
+            type_name = self._strip_generic(type_name)
+            types.append(primitive_types.get(type_name, type_name))
+        return types
 
 
 def pre_scan_java(files: list[Path], parser_wrapper) -> dict:

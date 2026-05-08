@@ -205,6 +205,15 @@ class _FakeCodeFinder:
             }]
         }
 
+    def audit_kotlin_call_ambiguity(self, *_args, **_kwargs):
+        return {
+            "kotlin_fn_to_fn_edges": 0,
+            "ambiguous_groups": 0,
+            "ambiguous_edges": 0,
+            "top_names": [],
+            "examples": [],
+        }
+
     def list_indexed_repositories(self):
         return [{"name": "repo", "path": "repo"}]
 
@@ -243,7 +252,7 @@ def cli_test_stubs(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_main, "list_watching_helper", lambda *_args, **_kwargs: None)
 
     fake_db = _FakeDBManager()
-    monkeypatch.setattr(cli_main, "_initialize_services", lambda *_args, **_kwargs: (fake_db, _FakeGraphBuilder(), _FakeCodeFinder()))
+    monkeypatch.setattr(cli_main, "_initialize_services", lambda *_args, **_kwargs: (fake_db, _FakeGraphBuilder(), _FakeCodeFinder(), MagicMock()))
     monkeypatch.setattr(cli_main.DatabaseManager, "test_connection", staticmethod(lambda *_args, **_kwargs: (True, None)))
     monkeypatch.setattr(cli_main.typer, "confirm", lambda *_args, **_kwargs: True)
 
@@ -342,7 +351,18 @@ def test_cli_inventory_grouped_from_source():
     assert inventory["bundle"] == {"export", "import", "load"}
     assert inventory["registry"] == {"list", "search", "download", "request"}
     assert inventory["find"] == {"name", "pattern", "type", "variable", "content", "decorator", "argument"}
-    assert inventory["analyze"] == {"calls", "callers", "chain", "deps", "tree", "complexity", "dead-code", "overrides", "variable"}
+    assert inventory["analyze"] == {
+        "calls",
+        "callers",
+        "chain",
+        "deps",
+        "tree",
+        "complexity",
+        "dead-code",
+        "overrides",
+        "variable",
+        "kotlin-call-audit",
+    }
     if "datasource" in inventory:
         assert inventory["datasource"] == {"mysql", "cassandra", "redis"}
     if "context" in inventory:
@@ -397,6 +417,7 @@ def test_all_canonical_cli_commands_run_with_kuzudb(kuzudb_env, cli_test_stubs):
         ["analyze", "dead-code"],
         ["analyze", "overrides", "run"],
         ["analyze", "variable", "value"],
+        ["analyze", "kotlin-call-audit"],
         ["query", "MATCH (n) RETURN n LIMIT 1"],
         ["cypher", "MATCH (n) RETURN n LIMIT 1"],
         ["i", "."],
@@ -665,4 +686,3 @@ def test_load_credentials_displays_kuzudb_backend(monkeypatch, tmp_path):
         lowered = output.getvalue().lower()
         assert "using database: kuzudb" in lowered
         assert "source:" in lowered
-

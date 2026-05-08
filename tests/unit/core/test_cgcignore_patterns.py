@@ -2,6 +2,8 @@ import subprocess
 import shutil
 import os
 import json
+import shlex
+import sys
 import pytest
 import uuid
 import time
@@ -15,6 +17,18 @@ from codegraphcontext.tools.graph_builder import DEFAULT_IGNORE_PATTERNS
 
 # Use unique directory for EACH test run to avoid conflicts
 BASE_TEST_DIR = Path("/tmp/cgc_test")
+TEST_HOME = BASE_TEST_DIR / "_home"
+CGC_CMD = f"{shlex.quote(sys.executable)} -m codegraphcontext.cli.main"
+
+
+def _test_env():
+    """Run shell-based CGC tests against the current interpreter in an isolated HOME."""
+    TEST_HOME.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["HOME"] = str(TEST_HOME)
+    env["DEFAULT_DATABASE"] = "falkordb"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
 
 def get_unique_test_dir():
     """Generate unique test directory"""
@@ -23,7 +37,7 @@ def get_unique_test_dir():
 
 def run(cmd):
     """Run command and return output"""
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=_test_env())
     return result.stdout + result.stderr
 
 
@@ -45,7 +59,7 @@ def setup_test_dir(test_dir: Path):
 def clean_db_completely():
     """Completely clean the database"""
     # Delete ALL nodes
-    run('cgc query "MATCH (n) DETACH DELETE n"')
+    run(f'{CGC_CMD} query "MATCH (n) DETACH DELETE n"')
     time.sleep(1)  # Wait for DB to sync
 
 def delete_repo_from_db(repo_path: Path):
@@ -53,25 +67,25 @@ def delete_repo_from_db(repo_path: Path):
     path_str = str(repo_path.resolve())
     # Escape quotes properly for shell
     escaped_path = path_str.replace('"', '\\"')
-    run(f'cgc query "MATCH (r:Repository {{path: \\"{escaped_path}\\"}})-[:CONTAINS*]->(n) DETACH DELETE r, n"')
-    run(f'cgc query "MATCH (r:Repository {{path: \\"{escaped_path}\\"}}) DETACH DELETE r"')
+    run(f'{CGC_CMD} query "MATCH (r:Repository {{path: \\"{escaped_path}\\"}})-[:CONTAINS*]->(n) DETACH DELETE r, n"')
+    run(f'{CGC_CMD} query "MATCH (r:Repository {{path: \\"{escaped_path}\\"}}) DETACH DELETE r"')
 
 def index_repo(test_dir: Path):
     """Index the test repository"""
-    output = run(f"cgc index {test_dir}")
+    output = run(f"{CGC_CMD} index {shlex.quote(str(test_dir))}")
     print(f"INDEX OUTPUT: {output[:500]}")  # Debug
     time.sleep(0.5)  # Wait for indexing to complete
     return output
 
 def query_all_files():
     """Query ALL files in database for debugging"""
-    output = run('cgc query "MATCH (f:File) RETURN f.name, f.path LIMIT 20"')
+    output = run(f'{CGC_CMD} query "MATCH (f:File) RETURN f.name, f.path LIMIT 20"')
     print(f"ALL FILES IN DB: {output}")
     return output
 
 def query_all_repos():
     """Query ALL repositories in database for debugging"""
-    output = run('cgc query "MATCH (r:Repository) RETURN r.name, r.path"')
+    output = run(f'{CGC_CMD} query "MATCH (r:Repository) RETURN r.name, r.path"')
     print(f"ALL REPOS IN DB: {output}")
     return output
 
@@ -84,7 +98,7 @@ def query_files_for_repo(test_dir: Path):
     
     # Use simpler query - match by repository name (folder name)
     repo_name = test_dir.name
-    output = run(f'cgc query "MATCH (r:Repository)-[:CONTAINS*]->(f:File) WHERE r.path CONTAINS \\"{repo_name}\\" RETURN f.name"')
+    output = run(f'{CGC_CMD} query "MATCH (r:Repository)-[:CONTAINS*]->(f:File) WHERE r.path CONTAINS \\"{repo_name}\\" RETURN f.name"')
     
     print(f"QUERY OUTPUT for {repo_name}: {output}")
     

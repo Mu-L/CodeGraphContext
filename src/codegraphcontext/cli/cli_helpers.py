@@ -2,10 +2,12 @@ import asyncio
 import json
 import uuid
 import urllib.parse
+from collections import Counter
 from pathlib import Path
 import time
 import os
 from typing import Optional, List, Dict, Any
+import typer
 from rich.console import Console
 from rich.table import Table
 from rich.progress import (
@@ -29,6 +31,31 @@ from ..utils.repo_path import any_repo_matches_path
 from .config_manager import resolve_context, ResolvedContext, register_repo_in_context, ensure_first_run_bootstrap
 
 console = Console()
+
+
+def _print_call_resolution_diagnostics(graph_builder: GraphBuilder, limit: int = 5) -> None:
+    diagnostics = getattr(graph_builder, "last_call_resolution_diagnostics", [])
+    if not diagnostics:
+        return
+
+    reason_counts = Counter(d.get("reason", "unknown") for d in diagnostics)
+    summary = ", ".join(
+        f"{reason}={count}" for reason, count in reason_counts.most_common()
+    )
+    console.print(
+        f"[yellow]Skipped {len(diagnostics)} unresolved call relationship(s): {summary}[/yellow]"
+    )
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Call", style="cyan", overflow="fold")
+    table.add_column("Reason", style="yellow")
+    table.add_column("Location", style="dim", overflow="fold")
+    for diagnostic in diagnostics[:limit]:
+        table.add_row(
+            str(diagnostic.get("full_call_name") or ""),
+            str(diagnostic.get("reason") or ""),
+            f"{diagnostic.get('caller_file_path')}:{diagnostic.get('line_number')}",
+        )
+    console.print(table)
 
 
 def _initialize_services(cli_context_flag: Optional[str] = None) -> tuple[Any, Any, Any, ResolvedContext]:
@@ -243,6 +270,7 @@ def index_helper(path: str, context: Optional[str] = None):
         asyncio.run(_run_index_with_progress(graph_builder, path_obj, is_dependency=False, cgcignore_path=ctx.cgcignore_path))
         time_end = time.time()
         elapsed = time_end - time_start
+        _print_call_resolution_diagnostics(graph_builder)
         console.print(f"[green]Successfully finished indexing: {path} in {elapsed:.2f} seconds[/green]")
         
         # Check if auto-watch is enabled
@@ -259,6 +287,7 @@ def index_helper(path: str, context: Optional[str] = None):
             
     except Exception as e:
         console.print(f"[bold red]An error occurred during indexing:[/bold red] {e}")
+        raise typer.Exit(code=1)
     finally:
         db_manager.close_driver()
 
@@ -289,6 +318,7 @@ def add_package_helper(package_name: str, language: str, context: Optional[str] 
 
     try:
         asyncio.run(_run_index_with_progress(graph_builder, package_path, is_dependency=True, cgcignore_path=ctx.cgcignore_path))
+        _print_call_resolution_diagnostics(graph_builder)
         console.print(f"[green]Successfully finished indexing package: {package_name}[/green]")
     except Exception as e:
         console.print(f"[bold red]An error occurred during package indexing:[/bold red] {e}")
@@ -544,9 +574,11 @@ def reindex_helper(path: str, context: Optional[str] = None):
         asyncio.run(_run_index_with_progress(graph_builder, path_obj, is_dependency=False, cgcignore_path=ctx.cgcignore_path))
         time_end = time.time()
         elapsed = time_end - time_start
+        _print_call_resolution_diagnostics(graph_builder)
         console.print(f"[green]Successfully re-indexed: {path} in {elapsed:.2f} seconds[/green]")
     except Exception as e:
         console.print(f"[bold red]An error occurred during re-indexing:[/bold red] {e}")
+        raise typer.Exit(code=1)
     finally:
         db_manager.close_driver()
 
