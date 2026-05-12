@@ -7,7 +7,7 @@ import sys
 import importlib.util
 
 # Keep this check aligned with runtime backend detection in core/__init__.py.
-KUZU_AVAILABLE = importlib.util.find_spec("real_ladybug") is not None
+KUZU_AVAILABLE = importlib.util.find_spec("kuzu") is not None
 
 # We will need the fixtures we defined in conftest.py
 # (python_sample_project, temp_test_dir)

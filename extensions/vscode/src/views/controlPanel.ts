@@ -266,7 +266,7 @@ export class SidebarControlPanel implements vscode.WebviewViewProvider {
     const complexityThreshold = cfg.get<number>("complexityWarningThreshold", 10);
     const maxDead = cfg.get<number>("maxDeadCodeDiagnostics", 100);
 
-    const dbOptions = ["falkordb", "ladybugdb", "neo4j"].map(d =>
+    const dbOptions = ["falkordb", "kuzudb", "neo4j"].map(d =>
       `<option value="${d}" ${d === dbMode ? "selected" : ""}>${d}</option>`
     ).join("");
 
