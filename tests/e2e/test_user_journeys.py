@@ -4,12 +4,10 @@ import shutil
 import subprocess
 import os
 import sys
+import importlib.util
 
-try:
-    import kuzu  # noqa: F401
-    KUZU_AVAILABLE = True
-except ImportError:
-    KUZU_AVAILABLE = False
+# Keep this check aligned with runtime backend detection in core/__init__.py.
+KUZU_AVAILABLE = importlib.util.find_spec("real_ladybug") is not None
 
 # We will need the fixtures we defined in conftest.py
 # (python_sample_project, temp_test_dir)

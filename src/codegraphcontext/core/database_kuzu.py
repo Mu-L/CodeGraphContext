@@ -225,6 +225,7 @@ class KuzuDBManager:
                     continue
                 warning_logger(f"Kuzu Schema Migration Error ({table_name}.{column_name}): {e}")
                 debug_log(f"Kuzu Schema Migration Error ({table_name}.{column_name}): {e}")
+                raise RuntimeError("Kuzu Schema Migration Failed") from e
 
     def close_driver(self):
         """Closes the connection."""

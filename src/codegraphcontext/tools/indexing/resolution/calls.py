@@ -1331,8 +1331,12 @@ def build_function_call_groups(
     imports_map: dict,
     file_class_lookup: Optional[Dict[str, set]] = None,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
-    """Resolve all function calls and return a single flat list for label-agnostic writing."""
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Resolve all function calls and return grouped CALLS payloads.
+
+    Return order is backward compatible with existing writer and tests:
+    (fn_to_fn, fn_to_class, fn_to_interface, file_to_fn, file_to_class, file_to_interface)
+    """
     skip_external = (get_config_value("SKIP_EXTERNAL_RESOLUTION") or "false").lower() == "true"
 
     if file_class_lookup is None:
@@ -2378,4 +2382,36 @@ def build_function_call_groups(
             info_logger(f"[CALLS] Resolved {idx + 1}/{len(all_file_data)} files... ({len(resolved_calls)} calls)")
 
     info_logger(f"[CALLS] Resolution complete: {len(resolved_calls)} total CALLS edges identified.")
-    return resolved_calls
+
+    fn_to_fn: List[Dict[str, Any]] = []
+    fn_to_class: List[Dict[str, Any]] = []
+    fn_to_interface: List[Dict[str, Any]] = []
+    file_to_fn: List[Dict[str, Any]] = []
+    file_to_class: List[Dict[str, Any]] = []
+    file_to_interface: List[Dict[str, Any]] = []
+
+    for edge in resolved_calls:
+        called_path = str(Path(edge.get("called_file_path", "")).resolve())
+        called_name = edge.get("called_name")
+        class_like_targets = file_class_lookup.get(called_path, set())
+
+        # Keep old grouping behavior: class-like callee names are bucketed separately.
+        is_class_like = called_name in class_like_targets
+        is_interface_like = False
+
+        if edge.get("type") == "file":
+            if is_interface_like:
+                file_to_interface.append(edge)
+            elif is_class_like:
+                file_to_class.append(edge)
+            else:
+                file_to_fn.append(edge)
+        else:
+            if is_interface_like:
+                fn_to_interface.append(edge)
+            elif is_class_like:
+                fn_to_class.append(edge)
+            else:
+                fn_to_fn.append(edge)
+
+    return fn_to_fn, fn_to_class, fn_to_interface, file_to_fn, file_to_class, file_to_interface
