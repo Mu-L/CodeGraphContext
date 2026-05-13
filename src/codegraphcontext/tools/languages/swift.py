@@ -23,7 +23,10 @@ SWIFT_QUERIES = {
         (import_declaration) @import
     """,
     "calls": """
-        (call_expression) @call_node
+        [
+            (call_expression) @call_node
+            (constructor_expression) @call_node
+        ]
     """,
     "variables": """
         [
@@ -450,8 +453,16 @@ class SwiftTreeSitterParser:
                                 if child.type == "simple_identifier":
                                     if not base_obj:
                                         base_obj = self._get_node_text(child)
-                                    else:
-                                        call_name = self._get_node_text(child)
+                                elif child.type == "navigation_suffix":
+                                    for subchild in child.children:
+                                        if subchild.type == "simple_identifier":
+                                            call_name = self._get_node_text(subchild)
+                        elif first_child.type == "user_type":
+                            # Constructor<Generic>() pattern
+                            for child in first_child.children:
+                                if child.type == "type_identifier":
+                                    call_name = self._get_node_text(child)
+                                    break
                     
                     if call_name == "unknown":
                         continue

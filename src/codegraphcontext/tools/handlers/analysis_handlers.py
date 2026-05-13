@@ -89,8 +89,9 @@ def analyze_code_relationships(code_finder: CodeFinder, **args) -> Dict[str, Any
         }
 
     try:
-        debug_log(f"Analyzing relationships: {query_type} for {target}, repo_path={repo_path}")
-        results = code_finder.analyze_code_relationships(query_type, target, context, repo_path=repo_path)
+        depth = args.get("depth")
+        debug_log(f"Analyzing relationships: {query_type} for {target}, repo_path={repo_path}, depth={depth}")
+        results = code_finder.analyze_code_relationships(query_type, target, context, repo_path=repo_path, depth=depth)
 
         # Apply per-query-type limit (falls back to tool-level limit)
         limit = get_tool_result_limit(query_type) or get_tool_result_limit("analyze_code_relationships")

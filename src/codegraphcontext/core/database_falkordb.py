@@ -335,7 +335,7 @@ class FalkorDBDriverWrapper:
     def __init__(self, graph):
         self.graph = graph
     
-    def session(self):
+    def session(self, **kwargs):
         """Returns a session-like object for FalkorDB."""
         return FalkorDBSessionWrapper(self.graph)
     
