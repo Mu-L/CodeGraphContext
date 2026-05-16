@@ -429,19 +429,21 @@ function getLanguageQueryKey(path: string): string | null {
 
 // Label a definition node type as Class / Function / Interface / etc.
 function getNodeDisplayLabel(nodeType: string): string {
-  if (nodeType.includes('class')) return 'Class';
-  if (nodeType.includes('interface')) return 'Interface';
-  if (nodeType.includes('trait')) return 'Trait';
-  if (nodeType.includes('enum')) return 'Enum';
-  if (nodeType.includes('module')) return 'Module';
-  if (nodeType.includes('struct')) return 'Class'; // treat struct as class-like
-  if (nodeType.includes('impl')) return 'Class';
+  const lower = nodeType.toLowerCase();
+  if (lower.includes('class')) return 'Class';
+  if (lower.includes('interface')) return 'Interface';
+  if (lower.includes('trait')) return 'Trait';
+  if (lower.includes('enum')) return 'Enum';
+  if (lower.includes('module')) return 'Module';
+  if (lower.includes('struct')) return 'Struct';
+  if (lower.includes('impl')) return 'Class';
+  if (lower.includes('function') || lower.includes('method') || lower.includes('subroutine')) return 'Function';
   return 'Function';
 }
 
 function valForLabel(label: string): number {
   switch (label) {
-    case 'Class': case 'Interface': case 'Trait': return 8;
+    case 'Class': case 'Interface': case 'Trait': case 'Struct': return 8;
     case 'Enum': return 7;
     case 'Module': return 9;
     default: return 6;
@@ -539,7 +541,7 @@ function getOrCreateFolderChain(filePath: string): number {
     if (folderNodes.has(accumulated)) {
       parentId = folderNodes.get(accumulated)!;
     } else {
-      const folderId = addNode(part, 'Folder', accumulated, 12);
+      const folderId = addNode(part, 'Directory', accumulated, 12);
       links.push({ source: parentId, target: folderId, type: 'CONTAINS' });
       folderNodes.set(accumulated, folderId);
       parentId = folderId;
@@ -673,12 +675,18 @@ async function processNextBatch() {
       await new Promise(r => setTimeout(r, 0));
     }
     
+    const fileName = f.path.split(/[\/\\]/).pop() || f.path;
+    const fileId = addNode(fileName, 'File', f.path, 10);
+    filePathToNodeId.set(f.path, fileId);
+    const parentFolderId = getOrCreateFolderChain(f.path);
+    links.push({ source: parentFolderId, target: fileId, type: 'CONTAINS' });
+
     const lang = await getLanguageForFile(f.path);
     if (!lang) continue;
 
     const queryKey = getLanguageQueryKey(f.path);
     if (!queryKey) continue;
-    
+
     parser!.setLanguage(lang);
     let tree: any;
     try {
@@ -687,13 +695,6 @@ async function processNextBatch() {
       tree = parser!.parse(src);
 
       const root = tree.rootNode;
-      const fileName = f.path.split('/').pop() || f.path;
-      const fileId = addNode(fileName, 'File', f.path, 10);
-      filePathToNodeId.set(f.path, fileId);
-      const parentFolderId = getOrCreateFolderChain(f.path);
-      links.push({ source: parentFolderId, target: fileId, type: 'CONTAINS' });
-
-      // Compile (or retrieve cached) query objects for this language
       const queries = getCompiledQueries(lang, queryKey);
 
       // 1. DEFINITIONS
