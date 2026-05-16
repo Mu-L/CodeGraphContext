@@ -85,10 +85,11 @@ const DEFAULT_EDGE_COLORS: Record<string, string> = {
 };
 
 // ─── Visualization Modes ─────────────────────────────────────────────────────
-type VisualizationMode = 'classic' | 'icon' | 'neon' | 'galaxy' | 'mermaid' | 'city3d' | 'graph3d';
+type VisualizationMode = 'classic' | 'curvy' | 'icon' | 'neon' | 'galaxy' | 'mermaid' | 'city3d' | 'graph3d';
 
 const VISUALIZATION_MODES: { id: VisualizationMode; name: string; description: string; previewColor: string }[] = [
   { id: 'classic', name: 'Classic', description: 'Standard colored circles', previewColor: '#42a5f5' },
+  { id: 'curvy', name: 'Curvy 2D', description: 'Smooth Bezier curved edges', previewColor: '#ec407a' },
   { id: 'mermaid', name: 'Flowchart', description: 'SVG diagram with Bezier edges', previewColor: '#26c6da' },
   { id: 'icon', name: 'Icon', description: 'Emoji icons by node type', previewColor: '#ffca28' },
   { id: 'city3d', name: 'City 3D', description: '3D cityscape with buildings', previewColor: '#ff9800' },
@@ -1540,6 +1541,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
             width={dimensions.width - effectiveSidebarW - effectiveCodePanelW}
             height={dimensions.height}
             nodeLabel="name"
+            linkCurvature={graphMode === 'curvy' ? 0.25 : 0}
             linkColor={getLinkColor}
             linkWidth={
               graphMode === 'galaxy' ? 0.7
