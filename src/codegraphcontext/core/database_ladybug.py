@@ -607,7 +607,7 @@ class LadybugSessionWrapper:
             'Repository': {'path', 'name', 'is_dependency'},
             'File': {'path', 'name', 'relative_path', 'package_name', 'is_dependency'},
             'Directory': {'path', 'name'},
-            'Module': {'name', 'lang', 'full_import_name'},
+            'Module': {'name', 'lang', 'full_import_name', 'path', 'line_number'},
             'Function': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'cyclomatic_complexity', 'context', 'context_type', 'class_context', 'class_context_line', 'is_dependency', 'decorators', 'args', 'http_method', 'http_path'},
             'Class': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'node_type', 'is_dependency', 'decorators'},
             'Variable': {'uid', 'name', 'path', 'line_number', 'source', 'docstring', 'lang', 'value', 'context', 'is_dependency'},
@@ -745,11 +745,7 @@ class LadybugSessionWrapper:
 
                          if all_ok:
                              raw_uid = ''.join(uid_components)
-                             # Add a stable fingerprint of the row payload to avoid
-                             # collisions when key components are absent.
-                             row_payload = json.dumps(item, sort_keys=True, default=str)
-                             row_fingerprint = hashlib.sha1(row_payload.encode('utf-8')).hexdigest()[:16]
-                             item['uid'] = f"{raw_uid}|{row_fingerprint}"
+                             item['uid'] = raw_uid
                          else:
                              all_ok = False
                              break

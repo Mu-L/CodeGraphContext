@@ -525,7 +525,7 @@ class KuzuSessionWrapper:
         try:
             # Force loop fallback for relationship writes inside UNWIND to avoid Kuzu query planner bugs
             # which can incorrectly bind/corrupt relationship endpoints across rows in the batch.
-            if "UNWIND" in query and ("-[" in query or "]->" in query):
+            if "UNWIND" in query and ("-[" in query or "]->" in query) and not getattr(self, "_skip_unwind_fallback", False):
                 raise Exception("unordered_map::at (forced fallback to avoid relationship UNWIND planner bugs)")
 
             # 2. Execute with appropriate locking
@@ -590,6 +590,7 @@ class KuzuSessionWrapper:
 
             error_logger(f"Kuzu Query failed: {query[:100]}... Error: {e}")
             debug_log(f"Kuzu Query failed: {query[:100]}... Error: {e}")
+            raise e
     def _translate_query(self, query: str, parameters: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """Translates Neo4j Cypher to Kuzu Cypher."""
         PK_MAP = {
@@ -606,7 +607,7 @@ class KuzuSessionWrapper:
             'Repository': {'path', 'name', 'is_dependency'},
             'File': {'path', 'name', 'relative_path', 'package_name', 'is_dependency'},
             'Directory': {'path', 'name'},
-            'Module': {'name', 'lang', 'full_import_name'},
+            'Module': {'name', 'lang', 'full_import_name', 'path', 'line_number'},
             'Function': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'cyclomatic_complexity', 'context', 'context_type', 'class_context', 'class_context_line', 'is_dependency', 'decorators', 'args', 'http_method', 'http_path'},
             'Class': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'node_type', 'is_dependency', 'decorators'},
             'Variable': {'uid', 'name', 'path', 'line_number', 'source', 'docstring', 'lang', 'value', 'context', 'is_dependency'},
@@ -744,11 +745,7 @@ class KuzuSessionWrapper:
 
                          if all_ok:
                              raw_uid = ''.join(uid_components)
-                             # Add a stable fingerprint of the row payload to avoid
-                             # collisions when key components are absent.
-                             row_payload = json.dumps(item, sort_keys=True, default=str)
-                             row_fingerprint = hashlib.sha1(row_payload.encode('utf-8')).hexdigest()[:16]
-                             item['uid'] = f"{raw_uid}|{row_fingerprint}"
+                             item['uid'] = raw_uid
                          else:
                              all_ok = False
                              break
