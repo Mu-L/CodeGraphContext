@@ -277,24 +277,11 @@ class GraphWriter:
                     if key not in seen_params:
                         seen_params.add(key)
                         unique_params.append(p)
-                # Phase 1: MERGE Parameter nodes first.
-                # Splitting into two queries prevents FalkorDB's UNWIND
-                # snapshot isolation from creating duplicate Parameter nodes
-                # when multiple rows reference the same parameter identity.
-                session.run(
-                    """
-                    UNWIND $batch AS row
-                    MERGE (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
-                """,
-                    batch=unique_params,
-                    file_path=file_path_str,
-                )
-                # Phase 2: Now MATCH both sides and MERGE the relationship.
                 session.run(
                     """
                     UNWIND $batch AS row
                     MATCH (fn:Function {name: row.func_name, path: $file_path, line_number: row.line_number})
-                    MATCH (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
+                    MERGE (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
                     MERGE (fn)-[:HAS_PARAMETER]->(p)
                 """,
                     batch=unique_params,
@@ -589,6 +576,8 @@ class GraphWriter:
                         row.get("caller_line_number", 0),
                         row.get("called_name", ""),
                         row.get("called_file_path", ""),
+                        row.get("called_line_number", 0),
+                        row.get("called_context", ""),
                         row.get("line_number", 0),
                         row.get("full_call_name", ""),
                         row.get("args_key", ""),
