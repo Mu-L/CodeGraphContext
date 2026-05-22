@@ -1388,17 +1388,22 @@ app.add_typer(find_app, name="find")
 @find_app.command("name")
 def find_by_name(
     ctx: typer.Context,
-    name: str = typer.Argument(..., help="Exact name to search for"),
+    name: str = typer.Argument(..., help="Name to search for"),
     type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by type (function, class, file, module)"),
+    fuzzy: Optional[bool] = typer.Option(None, "--fuzzy/--no-fuzzy", help="Enable/disable fuzzy matching for this command. Overrides the FUZZY_SEARCH config value (default: true)."),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
 ):
     """
-    Find code elements by exact name.
-    
+    Find code elements by name.
+
+    Fuzzy matching is enabled by default (configurable via the FUZZY_SEARCH
+    config key, or per-invocation with --fuzzy / --no-fuzzy).
+
     Examples:
         cgc find name MyClass
         cgc find name calculate --type function
+        cgc find name MyClass --no-fuzzy
         cgc find name MyClass --visual
     """
     _load_credentials()
@@ -1406,14 +1411,22 @@ def find_by_name(
     if not all(services[:3]):
         return
     db_manager, graph_builder, code_finder = services[:3]
-    
+
+    # Resolve effective fuzzy setting: CLI flag wins, else config, else true.
+    if fuzzy is None:
+        from codegraphcontext.cli.config_manager import load_config
+        cfg_value = load_config().get("FUZZY_SEARCH", "true")
+        fuzzy_search = str(cfg_value).strip().lower() == "true"
+    else:
+        fuzzy_search = fuzzy
+
     try:
         results = []
-        
+
         # Search based on type filter
         if type is None or type.lower() == 'all':
-            funcs = code_finder.find_by_function_name(name, fuzzy_search=False)
-            classes = code_finder.find_by_class_name(name, fuzzy_search=False)
+            funcs = code_finder.find_by_function_name(name, fuzzy_search=fuzzy_search)
+            classes = code_finder.find_by_class_name(name, fuzzy_search=fuzzy_search)
             variables = code_finder.find_by_variable_name(name)
             modules = code_finder.find_by_module_name(name)
             imports = code_finder.find_imports(name)
@@ -1445,11 +1458,11 @@ def find_by_name(
                         results.append(row)
         
         elif type.lower() == 'function':
-            results = code_finder.find_by_function_name(name, fuzzy_search=False)
+            results = code_finder.find_by_function_name(name, fuzzy_search=fuzzy_search)
             for r in results: r['type'] = 'Function'
-            
+
         elif type.lower() == 'class':
-            results = code_finder.find_by_class_name(name, fuzzy_search=False)
+            results = code_finder.find_by_class_name(name, fuzzy_search=fuzzy_search)
             for r in results: r['type'] = 'Class'
             
         elif type.lower() == 'variable':

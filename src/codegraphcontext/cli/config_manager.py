@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
     "ENABLE_VECTOR_RESOLVE": "false",
     "CGC_EMBEDDING_MODEL": "local",
     "CGC_EMBEDDING_BATCH_SIZE": "256",
+    # Default fuzzy matching behavior for `cgc find name` (overridable per-command with --fuzzy/--no-fuzzy)
+    "FUZZY_SEARCH": "true",
 }
 
 # Configuration key descriptions
@@ -123,6 +125,10 @@ CONFIG_DESCRIPTIONS = {
         "Number of function texts to embed per batch when ENABLE_VECTOR_RESOLVE=true. "
         "Larger values are faster but use more RAM. Default: 256. Reduce to 64 if you hit memory errors."
     ),
+    "FUZZY_SEARCH": (
+        "Enable fuzzy matching by default for `cgc find name` (true|false). "
+        "Per-invocation overrides are available via --fuzzy / --no-fuzzy."
+    ),
 }
 
 # Valid values for each config key
@@ -143,6 +149,7 @@ CONFIG_VALIDATORS = {
     "ENABLE_INHERIT_RESOLVE": ["true", "false"],
     "ENABLE_VECTOR_RESOLVE": ["true", "false"],
     "CGC_EMBEDDING_MODEL": ["local", "openai"],
+    "FUZZY_SEARCH": ["true", "false"],
 }
 DEFAULT_CGCIGNORE_PATTERNS = """\
 # Default .cgcignore patterns
