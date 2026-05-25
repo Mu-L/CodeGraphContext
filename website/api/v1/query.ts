@@ -101,6 +101,9 @@ export default async function handler(req: any, res: any) {
         });
       });
 
+      // Give Supabase's network routing table 250ms to fully propagate before broadcasting
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+
       // Dispatch query-request to the active browser tab
       const sendStatus = await channel.send({
         type: "broadcast",
@@ -179,6 +182,9 @@ export default async function handler(req: any, res: any) {
           }
         });
       });
+
+      // Give Supabase's network routing table 250ms to fully propagate before broadcasting
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
 
       // Prepare arguments (pass all params, ensuring repo is set)
       const toolArgs = {
