@@ -385,8 +385,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
 
   const userId = getOrCreateSessionId();
   const chatgptPreFillPrompt = `Let's connect to codegraphcontext session: ${userId}`;
-  const encodedPrompt = encodeURIComponent(chatgptPreFillPrompt);
-  const chatgptUrl = `https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext?q=${encodedPrompt}`;
+  const chatgptUrl = "https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext";
 
   const handleConnectChatGPT = () => {
     setShowChatGPTModal(true);
